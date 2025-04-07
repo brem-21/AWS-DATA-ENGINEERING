@@ -84,19 +84,19 @@ def create_indexes():
     cursor = conn.cursor()
 
     index_queries = [
-        ("apartment_attributes", "idx_apartment_attr_id", "CREATE INDEX idx_apartment_attr_id ON apartment_attributes(id);"),
+        ("apartments_attributes", "idx_apartment_attr_id", "CREATE INDEX idx_apartment_attr_id ON apartments_attributes(id);"),
         ("apartments", "idx_apartments_id", "CREATE INDEX idx_apartments_id ON apartments(id);"),
         ("bookings", "idx_bookings_id", "CREATE INDEX idx_bookings_id ON bookings(booking_id);"),
         ("user_viewing", "idx_user_viewing_user_id", "CREATE INDEX idx_user_viewing_user_id ON user_viewing(user_id);"),
         ("bookings", "idx_bookings_user_id", "CREATE INDEX idx_bookings_user_id ON bookings(user_id);"),
         ("bookings", "idx_bookings_apartment_id", "CREATE INDEX idx_bookings_apartment_id ON bookings(apartment_id);"),
         ("user_viewing", "idx_user_viewing_apartment_id", "CREATE INDEX idx_user_viewing_apartment_id ON user_viewing(apartment_id);"),
-        ("apartment_attributes", "idx_apartment_attr_cityname", "CREATE INDEX idx_apartment_attr_cityname ON apartment_attributes(cityname);"),
+        ("apartments_attributes", "idx_apartment_attr_cityname", "CREATE INDEX idx_apartment_attr_cityname ON apartments_attributes(cityname);"),
         ("apartments", "idx_apartments_price", "CREATE INDEX idx_apartments_price ON apartments(price);"),
         ("bookings", "idx_bookings_booking_date", "CREATE INDEX idx_bookings_booking_date ON bookings(booking_date);"),
         ("user_viewing", "idx_user_viewing_viewed_at", "CREATE INDEX idx_user_viewing_viewed_at ON user_viewing(viewed_at);"),
-        ("apartment_attributes", "idx_apartment_attr_category", "CREATE FULLTEXT INDEX idx_apartment_attr_category ON apartment_attributes(category);"),
-        ("apartment_attributes", "idx_apartment_attr_amenities", "CREATE FULLTEXT INDEX idx_apartment_attr_amenities ON apartment_attributes(amenities);")
+        ("apartments_attributes", "idx_apartment_attr_category", "CREATE FULLTEXT INDEX idx_apartment_attr_category ON apartments_attributes(category);"),
+        ("apartments_attributes", "idx_apartment_attr_amenities", "CREATE FULLTEXT INDEX idx_apartment_attr_amenities ON apartments_attributes(amenities);")
     ]
 
     for table, index_name, create_sql in index_queries:
