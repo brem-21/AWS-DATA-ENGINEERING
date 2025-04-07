@@ -79,32 +79,46 @@ def check_table_data():
     conn.close()
 
 def create_indexes():
-    """Create indexes on specific tables for optimized querying."""
+    """Recreate indexes on specific tables for optimized querying."""
     conn = mysql.connector.connect(**DATABASE_CONFIG)
     cursor = conn.cursor()
 
     index_queries = [
-        "CREATE INDEX idx_apartment_attr_id ON apartment_attributes(id);",
-        "CREATE INDEX idx_apartments_id ON apartments(id);",
-        "CREATE INDEX idx_bookings_id ON bookings(booking_id);",
-        "CREATE INDEX idx_user_viewing_user_id ON user_viewing(user_id);",
-        "CREATE INDEX idx_bookings_user_id ON bookings(user_id);",
-        "CREATE INDEX idx_bookings_apartment_id ON bookings(apartment_id);",
-        "CREATE INDEX idx_user_viewing_apartment_id ON user_viewing(apartment_id);",
-        "CREATE INDEX idx_apartment_attr_cityname ON apartment_attributes(cityname);",
-        "CREATE INDEX idx_apartments_price ON apartments(price);",
-        "CREATE INDEX idx_bookings_booking_date ON bookings(booking_date);",
-        "CREATE INDEX idx_user_viewing_viewed_at ON user_viewing(viewed_at);",
-        "CREATE FULLTEXT INDEX idx_apartment_attr_category ON apartment_attributes(category);",
-        "CREATE FULLTEXT INDEX idx_apartment_attr_amenities ON apartment_attributes(amenities);"
+        ("apartment_attributes", "idx_apartment_attr_id", "CREATE INDEX idx_apartment_attr_id ON apartment_attributes(id);"),
+        ("apartments", "idx_apartments_id", "CREATE INDEX idx_apartments_id ON apartments(id);"),
+        ("bookings", "idx_bookings_id", "CREATE INDEX idx_bookings_id ON bookings(booking_id);"),
+        ("user_viewing", "idx_user_viewing_user_id", "CREATE INDEX idx_user_viewing_user_id ON user_viewing(user_id);"),
+        ("bookings", "idx_bookings_user_id", "CREATE INDEX idx_bookings_user_id ON bookings(user_id);"),
+        ("bookings", "idx_bookings_apartment_id", "CREATE INDEX idx_bookings_apartment_id ON bookings(apartment_id);"),
+        ("user_viewing", "idx_user_viewing_apartment_id", "CREATE INDEX idx_user_viewing_apartment_id ON user_viewing(apartment_id);"),
+        ("apartment_attributes", "idx_apartment_attr_cityname", "CREATE INDEX idx_apartment_attr_cityname ON apartment_attributes(cityname);"),
+        ("apartments", "idx_apartments_price", "CREATE INDEX idx_apartments_price ON apartments(price);"),
+        ("bookings", "idx_bookings_booking_date", "CREATE INDEX idx_bookings_booking_date ON bookings(booking_date);"),
+        ("user_viewing", "idx_user_viewing_viewed_at", "CREATE INDEX idx_user_viewing_viewed_at ON user_viewing(viewed_at);"),
+        ("apartment_attributes", "idx_apartment_attr_category", "CREATE FULLTEXT INDEX idx_apartment_attr_category ON apartment_attributes(category);"),
+        ("apartment_attributes", "idx_apartment_attr_amenities", "CREATE FULLTEXT INDEX idx_apartment_attr_amenities ON apartment_attributes(amenities);")
     ]
 
-    for query in index_queries:
+    for table, index_name, create_sql in index_queries:
         try:
-            cursor.execute(query)
-            print(f"Successfully created: {query}")
+            # Check if the index exists
+            check_sql = f"""
+                SELECT COUNT(*) FROM information_schema.STATISTICS
+                WHERE table_schema = DATABASE() AND table_name = '{table}' AND index_name = '{index_name}';
+            """
+            cursor.execute(check_sql)
+            exists = cursor.fetchone()[0]
+
+            if exists:
+                drop_sql = f"DROP INDEX {index_name} ON {table};"
+                cursor.execute(drop_sql)
+                print(f"Dropped existing index: {index_name} on {table}")
+
+            cursor.execute(create_sql)
+            print(f"Created index: {index_name} on {table}")
+
         except mysql.connector.Error as e:
-            print(f"Error creating index: {query} - {e}")
+            print(f"Error with index {index_name} on {table}: {e}")
 
     conn.commit()
     cursor.close()
