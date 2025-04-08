@@ -1,48 +1,98 @@
-Overview
-========
+# AWS Glue with Step Functions Data Pipeline
 
-Welcome to Astronomer! This project was generated after you ran 'astro dev init' using the Astronomer CLI. This readme describes the contents of the project, as well as how to run Apache Airflow on your local machine.
+## Overview
+This project demonstrates a comprehensive data engineering pipeline using AWS Glue, Step Functions, Airflow, and Redshift. It includes:
+- Real estate data ETL from RDS to S3
+- Chess game data pipeline
+- Scheduled analytics with Redshift
+- Data quality monitoring
 
-Project Contents
-================
+## Architecture
+```mermaid
+graph TD
+    A[RDS MySQL] -->|Airflow DAG| B[S3 Raw Zone]
+    B -->|Glue Job| C[S3 Curated Zone]
+    C -->|Lambda| D[Redshift Analytics]
+    D --> E[Business Metrics]
+```
 
-Your Astro project contains the following files and folders:
+## Components
 
-- dags: This folder contains the Python files for your Airflow DAGs. By default, this directory includes one example DAG:
-    - `example_astronauts`: This DAG shows a simple ETL pipeline example that queries the list of astronauts currently in space from the Open Notify API and prints a statement for each astronaut. The DAG uses the TaskFlow API to define tasks in Python, and dynamic task mapping to dynamically print a statement for each astronaut. For more on how this DAG works, see our [Getting started tutorial](https://www.astronomer.io/docs/learn/get-started-with-airflow).
-- Dockerfile: This file contains a versioned Astro Runtime Docker image that provides a differentiated Airflow experience. If you want to execute other commands or overrides at runtime, specify them here.
-- include: This folder contains any additional files that you want to include as part of your project. It is empty by default.
-- packages.txt: Install OS-level packages needed for your project by adding them to this file. It is empty by default.
-- requirements.txt: Install Python packages needed for your project by adding them to this file. It is empty by default.
-- plugins: Add custom or community plugins for your project to this file. It is empty by default.
-- airflow_settings.yaml: Use this local-only file to specify Airflow Connections, Variables, and Pools instead of entering them in the Airflow UI as you develop DAGs in this project.
+### 1. Real Estate Pipeline
+**DAG**: `dags/real_estate.py`
+- Extracts data from RDS MySQL
+- Performs data quality checks
+- Creates optimized indexes
+- Transforms and loads to S3 in Parquet format
+- Verifies successful uploads
 
-Deploy Your Project Locally
-===========================
+### 2. Chess Data Pipeline
+**Script**: `chess_pipeline.py`
+- Extracts chess player data from public APIs
+- Loads to filesystem in structured format
+- Tracks player games and online status
 
-1. Start Airflow on your local machine by running 'astro dev start'.
+### 3. Analytics Lambda
+**Script**: `python/lambda.py`
+- Calculates key business metrics:
+  - Weekly average listing prices
+  - Monthly occupancy rates
+  - Popular locations
+  - Customer retention rates
+- Stores results in Redshift presentation layer
 
-This command will spin up 4 Docker containers on your machine, each for a different Airflow component:
+## Data Schemas
 
-- Postgres: Airflow's Metadata Database
-- Webserver: The Airflow component responsible for rendering the Airflow UI
-- Scheduler: The Airflow component responsible for monitoring and triggering tasks
-- Triggerer: The Airflow component responsible for triggering deferred tasks
+### Raw Data (RDS)
+```sql
+-- See raw_schema.sql
+CREATE TABLE raw_data.raw_apartments (...);
+CREATE TABLE raw_data.raw_bookings (...);
+```
 
-2. Verify that all 4 Docker containers were created by running 'docker ps'.
+### Curated Data (S3)
+```sql
+-- See curated_schema.sql
+CREATE TABLE curated.apartments (...);
+CREATE TABLE curated.bookings (...);
+```
 
-Note: Running 'astro dev start' will start your project with the Airflow Webserver exposed at port 8080 and Postgres exposed at port 5432. If you already have either of those ports allocated, you can either [stop your existing Docker containers or change the port](https://www.astronomer.io/docs/astro/cli/troubleshoot-locally#ports-are-not-available-for-my-local-airflow-webserver).
+## Setup
 
-3. Access the Airflow UI for your local Airflow project. To do so, go to http://localhost:8080/ and log in with 'admin' for both your Username and Password.
+1. **Prerequisites**:
+   - AWS Account with Glue, Redshift, Lambda access
+   - Airflow environment
+   - Python 3.8+
 
-You should also be able to access your Postgres Database at 'localhost:5432/postgres'.
+2. **Installation**:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-Deploy Your Project to Astronomer
-=================================
+3. **Configuration**:
+   - Set environment variables in `airflow_settings.yaml`
+   - Configure AWS credentials
 
-If you have an Astronomer account, pushing code to a Deployment on Astronomer is simple. For deploying instructions, refer to Astronomer documentation: https://www.astronomer.io/docs/astro/deploy-code/
+## Usage
 
-Contact
-=======
+1. **Run Airflow DAG**:
+   ```bash
+   airflow dags trigger Getting-data-from-RDS-and-uploading-to-S3
+   ```
 
-The Astronomer CLI is maintained with love by the Astronomer team. To report a bug or suggest a change, reach out to our support.
+2. **Manual Chess Pipeline**:
+   ```python
+   python chess_pipeline.py
+   ```
+
+3. **Lambda Invocation**:
+   - Configure as daily CloudWatch Event
+   - Or test via AWS Console
+
+## Monitoring
+- Airflow UI for pipeline status
+- CloudWatch logs for Lambda executions
+- Redshift queries for analytics
+
+## License
+Apache 2.0 - See LICENSE file
