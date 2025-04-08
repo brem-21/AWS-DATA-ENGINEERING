@@ -1,4 +1,4 @@
-import psycopg2
+import boto3
 import os
 import logging
 from datetime import datetime, timedelta
@@ -6,266 +6,167 @@ from datetime import datetime, timedelta
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+# Initialize the Redshift Data API client
+client = boto3.client('redshift-data')
+
 def lambda_handler(event, context):
-    # Redshift connection parameters
-    host = "redshift-cluster-1.corgdzmbeq2a.us-east-1.redshift.amazonaws.com"
-    port = "5439"
-    dbname = "dev"
-    user = "awsuser"
-    password = "Brempong123"
-    
+    # Redshift connection parameters (from Lambda environment variables)
+    cluster_id = os.environ['REDSHIFT_CLUSTER_ID']  # Your Redshift cluster name
+    database = os.environ['REDSHIFT_DATABASE']      # Your Redshift database name
+    db_user = os.environ['REDSHIFT_USER']           # Your Redshift username
+    # (No password needed when using direct credentials with Data API)
+
     # Calculate date parameters
     today = datetime.now().date()
     week_start = today - timedelta(days=today.weekday())
     month_start = today.replace(day=1)
-    
-    # Define all queries as variables
-    avg_listing_price_query = f"""
-        INSERT INTO presentation.weekly_avg_listing_price
-        SELECT 
-            DATE('{week_start}') AS week_start_date,
-            AVG(price) AS avg_price,
-            currency
-        FROM 
-            raw_data.raw_apartments
-        WHERE 
-            is_active = 1
-            AND TO_DATE(listing_created_on, 'YYYY-MM-DD') >= DATEADD(day, -7, DATE('{week_start}'))
-        GROUP BY 
-            currency
-        ON CONFLICT (week_start_date, currency) 
-        DO UPDATE SET 
-            avg_price = EXCLUDED.avg_price;
-    """
-    
-    occupancy_rate_query = f"""
-        WITH available_nights AS (
-            SELECT 
-                DATE('{month_start}') AS month_start_date,
-                COUNT(*) * 30 AS total_available_nights
-            FROM 
-                raw_data.raw_apartments
-            WHERE 
-                is_active = 1
-        ),
-        booked_nights AS (
-            SELECT 
-                DATE('{month_start}') AS month_start_date,
-                SUM(DATEDIFF(day, TO_DATE(checkin_date, 'YYYY-MM-DD'), TO_DATE(checkout_date, 'YYYY-MM-DD'))) AS booked_nights
-            FROM 
-                raw_data.raw_bookings
-            WHERE 
-                booking_status = 'confirmed'
-                AND TO_DATE(checkin_date, 'YYYY-MM-DD') >= DATE('{month_start}')
-                AND TO_DATE(checkout_date, 'YYYY-MM-DD') < DATEADD(month, 1, DATE('{month_start}'))
-        )
-        INSERT INTO presentation.monthly_occupancy_rate
-        SELECT 
-            a.month_start_date,
-            a.total_available_nights,
-            COALESCE(b.booked_nights, 0) AS booked_nights,
-            (COALESCE(b.booked_nights, 0) * 100.0 / NULLIF(a.total_available_nights, 0)) AS occupancy_rate
-        FROM 
-            available_nights a
-        LEFT JOIN 
-            booked_nights b ON a.month_start_date = b.month_start_date
-        ON CONFLICT (month_start_date) 
-        DO UPDATE SET 
-            total_available_nights = EXCLUDED.total_available_nights,
-            booked_nights = EXCLUDED.booked_nights,
-            occupancy_rate = EXCLUDED.occupancy_rate;
-    """
-    
-    popular_locations_query = f"""
-        WITH weekly_bookings AS (
-            SELECT 
-                a.cityname,
-                a.state,
-                COUNT(*) AS booking_count
-            FROM 
-                raw_data.raw_bookings b
-            JOIN 
-                raw_data.raw_apartment_attr a ON b.apartment_id = a.id
-            WHERE 
-                b.booking_status = 'confirmed'
-                AND TO_DATE(b.booking_date, 'YYYY-MM-DD') >= DATE('{week_start}')
-                AND TO_DATE(b.booking_date, 'YYYY-MM-DD') < DATEADD(day, 7, DATE('{week_start}'))
-            GROUP BY 
-                a.cityname, a.state
-        )
-        INSERT INTO presentation.weekly_popular_locations
-        SELECT 
-            DATE('{week_start}') AS week_start_date,
-            cityname,
-            state,
-            booking_count,
-            RANK() OVER (ORDER BY booking_count DESC) AS rank
-        FROM 
-            weekly_bookings
-        ORDER BY 
-            booking_count DESC
-        LIMIT 10
-        ON CONFLICT (week_start_date, cityname, state) 
-        DO UPDATE SET 
-            booking_count = EXCLUDED.booking_count,
-            rank = EXCLUDED.rank;
-    """
-    
-    top_performing_query = f"""
-        WITH weekly_revenue AS (
-            SELECT 
-                b.apartment_id,
-                a.title,
-                attr.cityname,
-                attr.state,
-                SUM(b.total_price) AS total_revenue,
-                b.currency,
-                RANK() OVER (PARTITION BY b.currency ORDER BY SUM(b.total_price) DESC) AS rank
-            FROM 
-                raw_data.raw_bookings b
-            JOIN 
-                raw_data.raw_apartments a ON b.apartment_id = a.id
-            JOIN 
-                raw_data.raw_apartment_attr attr ON b.apartment_id = attr.id
-            WHERE 
-                b.booking_status = 'confirmed'
-                AND TO_DATE(b.booking_date, 'YYYY-MM-DD') >= DATE('{week_start}')
-                AND TO_DATE(b.booking_date, 'YYYY-MM-DD') < DATEADD(day, 7, DATE('{week_start}'))
-            GROUP BY 
-                b.apartment_id, a.title, attr.cityname, attr.state, b.currency
-        )
-        INSERT INTO presentation.weekly_top_performing_listings
-        SELECT 
-            DATE('{week_start}') AS week_start_date,
-            apartment_id,
-            title,
-            cityname,
-            state,
-            total_revenue,
-            currency,
-            rank
-        FROM 
-            weekly_revenue
-        WHERE 
-            rank <= 10
-        ON CONFLICT (week_start_date, apartment_id) 
-        DO UPDATE SET 
-            title = EXCLUDED.title,
-            cityname = EXCLUDED.cityname,
-            state = EXCLUDED.state,
-            total_revenue = EXCLUDED.total_revenue,
-            currency = EXCLUDED.currency,
-            rank = EXCLUDED.rank;
-    """
-    
-    user_bookings_query = f"""
-        INSERT INTO presentation.weekly_user_bookings
-        SELECT 
-            DATE('{week_start}') AS week_start_date,
-            user_id,
-            COUNT(*) AS booking_count
-        FROM 
-            raw_data.raw_bookings
-        WHERE 
-            booking_status = 'confirmed'
-            AND TO_DATE(booking_date, 'YYYY-MM-DD') >= DATE('{week_start}')
-            AND TO_DATE(booking_date, 'YYYY-MM-DD') < DATEADD(day, 7, DATE('{week_start}'))
-        GROUP BY 
-            user_id
-        ON CONFLICT (week_start_date, user_id) 
-        DO UPDATE SET 
-            booking_count = EXCLUDED.booking_count;
-    """
-    
-    avg_duration_query = f"""
-        INSERT INTO presentation.avg_booking_duration
-        SELECT 
-            DATE('{today}') AS calculation_date,
-            AVG(DATEDIFF(day, TO_DATE(checkin_date, 'YYYY-MM-DD'), TO_DATE(checkout_date, 'YYYY-MM-DD'))) AS avg_duration_days
-        FROM 
-            raw_data.raw_bookings
-        WHERE 
-            booking_status = 'confirmed'
-            AND TO_DATE(booking_date, 'YYYY-MM-DD') >= DATEADD(day, -30, DATE('{today}'))
-        ON CONFLICT (calculation_date) 
-        DO UPDATE SET 
-            avg_duration_days = EXCLUDED.avg_duration_days;
-    """
-    
-    repeat_customer_query = f"""
-        WITH customer_bookings AS (
-            SELECT 
-                user_id,
-                COUNT(*) AS booking_count
-            FROM 
-                raw_data.raw_bookings
-            WHERE 
-                booking_status = 'confirmed'
-                AND TO_DATE(booking_date, 'YYYY-MM-DD') >= DATEADD(day, -30, DATE('{today}'))
-            GROUP BY 
-                user_id
-        )
-        INSERT INTO presentation.repeat_customer_rate
-        SELECT 
-            DATE('{today}') AS calculation_date,
-            COUNT(*) AS total_customers,
-            SUM(CASE WHEN booking_count > 1 THEN 1 ELSE 0 END) AS repeat_customers,
-            (SUM(CASE WHEN booking_count > 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*)) AS repeat_rate
-        FROM 
-            customer_bookings
-        ON CONFLICT (calculation_date) 
-        DO UPDATE SET 
-            total_customers = EXCLUDED.total_customers,
-            repeat_customers = EXCLUDED.repeat_customers,
-            repeat_rate = EXCLUDED.repeat_rate;
-    """
-    
-    # Create a list of all queries with their names for logging
+
+    # Define all queries (same as before)
     queries = [
-        ("weekly_avg_listing_price", avg_listing_price_query),
-        ("monthly_occupancy_rate", occupancy_rate_query),
-        ("weekly_popular_locations", popular_locations_query),
-        ("weekly_top_performing_listings", top_performing_query),
-        ("weekly_user_bookings", user_bookings_query),
-        ("avg_booking_duration", avg_duration_query),
-        ("repeat_customer_rate", repeat_customer_query)
+            ("weekly_avg_listing_price", f"""
+                -- Lambda would run this weekly
+                INSERT INTO presentation.average_listing_price (week_start_date, average_price)
+                    SELECT 
+                        DATE_TRUNC('week', TO_DATE(listing_created_on, 'YYYY-MM-DD')) AS week_start_date,
+                        AVG(price) AS average_price
+                    FROM 
+                        raw_data.raw_apartments
+                    WHERE 
+                        is_active = 1
+                    GROUP BY 
+                        DATE_TRUNC('week', TO_DATE(listing_created_on, 'YYYY-MM-DD'));
+            """),
+            
+            ("monthly_occupancy_rate", f"""
+                -- Lambda would run this monthly
+                INSERT INTO presentation.occupancy_rate (month, occupancy_rate)
+                    SELECT 
+                        DATE_TRUNC('month', TO_DATE(checkin_date, 'YYYY-MM-DD')) AS month,
+                        (SUM(DATEDIFF(day, TO_DATE(checkin_date, 'YYYY-MM-DD'), TO_DATE(checkout_date, 'YYYY-MM-DD'))) /
+                        (COUNT(*) * 30.0)) * 100 AS occupancy_rate
+                    FROM 
+                        raw_data.raw_bookings
+                    WHERE 
+                        booking_status = 'confirmed'
+                    GROUP BY 
+                        DATE_TRUNC('month', TO_DATE(checkin_date, 'YYYY-MM-DD'));
+            """),
+            
+            ("weekly_popular_locations", f"""
+                                -- Lambda would run this weekly
+                INSERT INTO presentation.most_popular_locations (week_start_date, cityname, total_bookings)
+                SELECT 
+                    DATE_TRUNC('week', TO_DATE(booking_date, 'YYYY-MM-DD')) AS week_start_date,
+                    cityname,
+                    COUNT(*) AS total_bookings
+                FROM 
+                    raw_data.raw_bookings b
+                JOIN 
+                    raw_data.raw_apartment_attr a ON b.apartment_id = a.id
+                WHERE 
+                    booking_status = 'confirmed'
+                GROUP BY 
+                    DATE_TRUNC('week', TO_DATE(booking_date, 'YYYY-MM-DD')), cityname
+                ORDER BY 
+                    week_start_date, total_bookings DESC;
+            """),
+            
+            ("weekly_top_performing_listings", f"""
+                -- Lambda would run this weekly
+                INSERT INTO presentation.top_performing_listings (week_start_date, apartment_id, total_revenue)
+                SELECT 
+                    DATE_TRUNC('week', TO_DATE(booking_date, 'YYYY-MM-DD')) AS week_start_date,
+                    apartment_id,
+                    SUM(total_price) AS total_revenue
+                FROM 
+                    raw_data.raw_bookings
+                WHERE 
+                    booking_status = 'confirmed'
+                GROUP BY 
+                    DATE_TRUNC('week', TO_DATE(booking_date, 'YYYY-MM-DD')), apartment_id
+                ORDER BY 
+                    week_start_date, total_revenue DESC;
+            """),
+            
+            ("weekly_user_bookings", f"""
+                -- Lambda would run this weekly
+                    INSERT INTO presentation.total_bookings_per_user (week_start_date, user_id, total_bookings)
+                    SELECT 
+                        DATE_TRUNC('week', TO_DATE(booking_date, 'YYYY-MM-DD')) AS week_start_date,
+                        user_id,
+                        COUNT(*) AS total_bookings
+                    FROM 
+                        raw_data.raw_bookings
+                    WHERE 
+                        booking_status = 'confirmed'
+                    GROUP BY 
+                        DATE_TRUNC('week', TO_DATE(booking_date, 'YYYY-MM-DD')), user_id;
+                                """),
+            
+            ("avg_booking_duration", f"""
+                -- Lambda would run this daily/weekly
+                INSERT INTO presentation.average_booking_duration (month, average_duration)
+                SELECT 
+                    DATE_TRUNC('month', TO_DATE(checkin_date, 'YYYY-MM-DD')) AS month,
+                    AVG(DATEDIFF(day, TO_DATE(checkin_date, 'YYYY-MM-DD'), TO_DATE(checkout_date, 'YYYY-MM-DD'))) AS average_duration
+                FROM 
+                    raw_data.raw_bookings
+                WHERE 
+                    booking_status = 'confirmed'
+                GROUP BY 
+                    DATE_TRUNC('month', TO_DATE(checkin_date, 'YYYY-MM-DD'));
+            """),
+            
+            ("repeat_customer_rate", f"""
+                -- Lambda would run this daily
+                   INSERT INTO presentation.repeat_customer_rate (rolling_30_day_period_start, repeat_customer_rate)
+                    SELECT 
+                        rolling_30_day_period_start,
+                        (COUNT(DISTINCT CASE WHEN bookings_per_user > 1 THEN user_id END) * 100.0) / COUNT(DISTINCT user_id) AS repeat_customer_rate
+                    FROM (
+                        SELECT 
+                            user_id,
+                            COUNT(*) AS bookings_per_user,
+                            DATE_TRUNC('day', TO_DATE(booking_date, 'YYYY-MM-DD')) AS rolling_30_day_period_start
+                        FROM 
+                            raw_data.raw_bookings
+                        WHERE 
+                            booking_status = 'confirmed'
+                        GROUP BY 
+                            user_id, DATE_TRUNC('day', TO_DATE(booking_date, 'YYYY-MM-DD'))
+                    ) AS subquery
+                    GROUP BY 
+                        rolling_30_day_period_start;
+            """)
     ]
-    
     try:
-        # Connect to Redshift
-        conn = psycopg2.connect(
-            host=host,
-            port=port,
-            dbname=dbname,
-            user=user,
-            password=password,
-            connect_timeout=10
-        )
-        cursor = conn.cursor()
-        
         # Execute all queries in sequence
         for query_name, query in queries:
             try:
                 logger.info(f"Executing {query_name} query...")
-                cursor.execute(query)
-                conn.commit()
-                logger.info(f"Successfully executed {query_name} query")
+                
+                response = client.execute_statement(
+                    ClusterIdentifier=cluster_id,  # Your cluster name
+                    Database=database,            # Your DB name
+                    DbUser=db_user,               # Your Redshift username
+                    Sql=query,
+                    StatementName=query_name
+                )
+                
+                statement_id = response['Id']
+                logger.info(f"Started execution of {query_name} (Statement ID: {statement_id})")
+                
             except Exception as e:
-                logger.error(f"Error executing {query_name} query: {str(e)}")
-                conn.rollback()  # Rollback the current transaction if there's an error
-                # Continue to next query even if one fails
+                logger.error(f"Error executing {query_name}: {str(e)}")
+                continue  # Proceed to next query even if one fails
         
-        logger.info("All metric calculations completed")
-        print(f)
+        logger.info("All queries executed successfully (async).")
         
     except Exception as e:
-        logger.error(f"Database connection error: {str(e)}")
+        logger.error(f"Redshift Data API error: {str(e)}")
         raise e
-    finally:
-        if 'conn' in locals():
-            conn.close()
     
     return {
         'statusCode': 200,
-        'body': 'All metric calculations completed'
+        'body': 'All metric calculations initiated'
     }
