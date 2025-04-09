@@ -1,0 +1,11 @@
+pandas
+numpy
+sqlalchemy
+dotenv
+pymysql
+mysql-connector-python
+dlt[filesystem]
+dlt
+s3fs
+boto3
+pyarrow
